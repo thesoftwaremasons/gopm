@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>gopm dashboard</title>
+<style>
+  body { background:#1a1a2e; color:#eee; font-family:monospace; margin:0; padding:16px; }
+  h1 { color:#e94560; margin:0 0 12px; }
+  table { border-collapse:collapse; width:100%; margin-bottom:16px; }
+  th { background:#16213e; color:#0f3460; color:#a8b2c1; padding:6px 10px; text-align:left; border-bottom:1px solid #0f3460; }
+  td { padding:5px 10px; border-bottom:1px solid #16213e; cursor:pointer; }
+  tr:hover td { background:#16213e; }
+  .online,.ready { color:#4ecca3; }
+  .unhealthy,.errored,.build_failed { color:#e94560; }
+  .starting,.building { color:#f5a623; }
+  .stopped { color:#666; }
+  #log-panel { background:#0d0d1a; border:1px solid #0f3460; padding:10px; height:300px; overflow-y:auto; font-size:12px; }
+  #log-title { margin:8px 0 4px; color:#a8b2c1; }
+  .btn { background:#0f3460; color:#eee; border:none; padding:3px 8px; cursor:pointer; border-radius:3px; font-size:11px; margin-left:4px; }
+  .btn:hover { background:#e94560; }
+  #status-bar { font-size:11px; color:#666; margin-top:8px; }
+</style>
+</head>
+<body>
+<h1>gopm</h1>
+<table id="procs">
+  <thead><tr><th>id</th><th>name</th><th>status</th><th>pid</th><th>restarts</th><th>uptime</th><th>memory</th><th>cpu%</th><th>actions</th></tr></thead>
+  <tbody></tbody>
+</table>
+<div id="log-title">Select a process to view logs</div>
+<div id="log-panel"></div>
+<div id="status-bar">auto-refresh every 2s</div>
+
+<script>
+var selectedApp = null;
+var logSource = null;
+
+function fmtMem(bytes) {
+  if (!bytes) return '-';
+  if (bytes >= 1073741824) return (bytes/1073741824).toFixed(1)+'G';
+  if (bytes >= 1048576)    return (bytes/1048576).toFixed(1)+'M';
+  if (bytes >= 1024)       return (bytes/1024).toFixed(1)+'K';
+  return bytes+'B';
+}
+
+function fmtCPU(v) {
+  return v > 0 ? v.toFixed(1)+'%' : '-';
+}
+
+function statusClass(s) {
+  if (s==='online'||s==='ready') return 'online';
+  if (s==='unhealthy'||s==='errored'||s==='build_failed') return 'unhealthy';
+  if (s==='starting'||s==='building') return 'starting';
+  return 'stopped';
+}
+
+function refresh() {
+  fetch('/api/processes').then(r=>r.json()).then(data => {
+    var tbody = document.querySelector('#procs tbody');
+    tbody.innerHTML = '';
+    (data||[]).forEach(function(p) {
+      var tr = document.createElement('tr');
+      tr.innerHTML = '<td>'+p.id+'</td>' +
+        '<td>'+p.name+'</td>' +
+        '<td class="'+statusClass(p.status)+'">'+p.status+'</td>' +
+        '<td>'+(p.pid||'-')+'</td>' +
+        '<td>'+p.restarts+'</td>' +
+        '<td>'+p.uptime+'</td>' +
+        '<td>'+fmtMem(p.memory)+'</td>' +
+        '<td>'+fmtCPU(p.cpu)+'</td>' +
+        '<td>' +
+          '<button class="btn" onclick="doRestart(\''+p.name+'\')">restart</button>' +
+          '<button class="btn" onclick="doStop(\''+p.name+'\')">stop</button>' +
+          '<button class="btn" onclick="streamLogs(\''+p.name+'\')">logs</button>' +
+        '</td>';
+      tbody.appendChild(tr);
+    });
+    document.getElementById('status-bar').textContent = 'last updated: '+new Date().toLocaleTimeString();
+  }).catch(function(e){ document.getElementById('status-bar').textContent='error: '+e; });
+}
+
+function doRestart(name) {
+  fetch('/api/'+name+'/restart', {method:'POST'}).then(function(){refresh();});
+}
+function doStop(name) {
+  fetch('/api/'+name+'/stop', {method:'POST'}).then(function(){refresh();});
+}
+
+function streamLogs(name) {
+  if (logSource) { logSource.close(); logSource = null; }
+  selectedApp = name;
+  document.getElementById('log-title').textContent = 'Logs: '+name;
+  var panel = document.getElementById('log-panel');
+  panel.innerHTML = '';
+  logSource = new EventSource('/api/logs/'+encodeURIComponent(name)+'/stream');
+  logSource.onmessage = function(e) {
+    var line = document.createElement('div');
+    line.textContent = e.data;
+    panel.appendChild(line);
+    panel.scrollTop = panel.scrollHeight;
+  };
+  logSource.onerror = function() {
+    var line = document.createElement('div');
+    line.style.color='#666';
+    line.textContent = '--- stream ended ---';
+    panel.appendChild(line);
+  };
+}
+
+setInterval(refresh, 2000);
+refresh();
+</script>
+</body>
+</html>

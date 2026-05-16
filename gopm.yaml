@@ -1,0 +1,27 @@
+apps:
+  - name: heartbeat
+    command: go
+    args:
+      - run
+      - ./examples/heartbeat
+    auto_restart: true
+    max_restarts: 5
+    log_file: ./logs/heartbeat.log
+    log_max_size_mb: 5
+    log_max_backups: 3
+    groups:
+      - examples
+    health_check:
+      url: http://127.0.0.1:8088/health
+      interval: 5s
+      timeout: 2s
+      retries: 3
+    port: 8088
+    watch:
+      enabled: true
+      dirs:
+        - ./examples/heartbeat
+      extensions:
+        - .go
+      build_cmd: go test ./examples/heartbeat
+      debounce_ms: 300

@@ -1,0 +1,29 @@
+# Build outputs
+/bin/
+/dist/
+/*.exe
+/*.exe~
+/*.test
+
+# Runtime state and logs
+/logs/
+*.log
+*.pid
+
+# Generated documentation exports
+/docs/*.html
+/docs/*.pdf
+
+# Editor and OS files
+.DS_Store
+Thumbs.db
+*.swp
+*.tmp
+*.bak
+*~
+.vscode/
+.idea/
+
+# Go workspace/cache artifacts
+coverage.out
+*.coverprofile
