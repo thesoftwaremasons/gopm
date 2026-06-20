@@ -5,6 +5,7 @@ import { ConnectionList } from './ConnectionList'
 import { ConnectionForm } from './ConnectionForm'
 import { SchemaTree } from './SchemaTree'
 import { JoinList } from './JoinList'
+import { ChartList } from './ChartList'
 import { deleteConnection, testConnection } from '../api/client'
 
 export function Sidebar() {
@@ -91,6 +92,21 @@ export function Sidebar() {
             </div>
           </>
         )}
+      </div>
+
+      {/* Charts section */}
+      <div className="border-t border-slate-700 pt-2">
+        <div className="flex items-center justify-between px-3 py-1">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Charts</span>
+          <button
+            onClick={() => navigate('/charts/new')}
+            className="text-slate-400 hover:text-white text-xs transition-colors"
+            title="New chart"
+          >
+            +
+          </button>
+        </div>
+        <ChartList />
       </div>
 
       {/* Joins section */}

@@ -4,6 +4,7 @@ import { Sidebar } from './components/Sidebar'
 import { DataBrowser } from './components/DataBrowser'
 import { QueryEditor } from './components/QueryEditor'
 import { JoinBuilder } from './components/JoinBuilder'
+import { ChartBuilder } from './components/ChartBuilder'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -81,6 +82,22 @@ function App() {
             element={
               <Layout>
                 <JoinBuilder />
+              </Layout>
+            }
+          />
+          <Route
+            path="/charts/new"
+            element={
+              <Layout>
+                <ChartBuilder />
+              </Layout>
+            }
+          />
+          <Route
+            path="/charts/:chartId"
+            element={
+              <Layout>
+                <ChartBuilder />
               </Layout>
             }
           />

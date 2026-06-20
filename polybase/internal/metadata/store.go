@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/thesoftwaremasons/polybase/internal/adapter"
+	"github.com/thesoftwaremasons/polybase/internal/chart"
 	"github.com/thesoftwaremasons/polybase/internal/crypto"
 	"github.com/thesoftwaremasons/polybase/internal/join"
 	_ "modernc.org/sqlite"
@@ -61,6 +62,13 @@ func (s *Store) migrate() error {
 			value TEXT NOT NULL
 		);
 		CREATE TABLE IF NOT EXISTS join_definitions (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL,
+			definition TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
+		CREATE TABLE IF NOT EXISTS chart_definitions (
 			id         TEXT PRIMARY KEY,
 			name       TEXT NOT NULL,
 			definition TEXT NOT NULL,
@@ -219,4 +227,60 @@ func (s *Store) DeleteConnection(ctx context.Context, id string) error {
 
 func (s *Store) Close() error {
 	return s.db.Close()
+}
+
+// ── Chart CRUD ────────────────────────────────────────────────────────────────
+
+func (s *Store) SaveChart(ctx context.Context, c chart.Definition) error {
+	data, err := json.Marshal(c)
+	if err != nil {
+		return fmt.Errorf("metadata: marshal chart: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO chart_definitions(id,name,definition,created_at,updated_at)
+		VALUES(?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name, definition=excluded.definition, updated_at=excluded.updated_at`,
+		c.ID, c.Name, string(data), now, now)
+	return err
+}
+
+func (s *Store) ListCharts(ctx context.Context) ([]chart.Definition, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT definition FROM chart_definitions ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []chart.Definition
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var c chart.Definition
+		if err := json.Unmarshal([]byte(raw), &c); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetChart(ctx context.Context, id string) (chart.Definition, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT definition FROM chart_definitions WHERE id=?`, id).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return chart.Definition{}, fmt.Errorf("chart %q not found", id)
+	}
+	if err != nil {
+		return chart.Definition{}, err
+	}
+	var c chart.Definition
+	return c, json.Unmarshal([]byte(raw), &c)
+}
+
+func (s *Store) DeleteChart(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM chart_definitions WHERE id=?`, id)
+	return err
 }

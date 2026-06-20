@@ -52,6 +52,20 @@ export interface CreateConnectionRequest {
   config: Partial<ConnectionConfig>
 }
 
+export type ChartType = 'bar' | 'line' | 'area' | 'pie'
+
+export interface ChartDefinition {
+  id: string
+  name: string
+  connection_id: string
+  sql: string
+  x_column: string
+  y_column: string
+  chart_type: ChartType
+  created_at?: string
+  updated_at?: string
+}
+
 export interface JoinDefinition {
   id: string
   name: string

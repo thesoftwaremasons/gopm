@@ -21,6 +21,7 @@ import (
 	"github.com/thesoftwaremasons/polybase/internal/adapter"
 	_ "github.com/thesoftwaremasons/polybase/internal/adapter/mongodb"
 	_ "github.com/thesoftwaremasons/polybase/internal/adapter/postgres"
+	"github.com/thesoftwaremasons/polybase/internal/chart"
 	"github.com/thesoftwaremasons/polybase/internal/crypto"
 	"github.com/thesoftwaremasons/polybase/internal/join"
 	"github.com/thesoftwaremasons/polybase/internal/metadata"
@@ -95,6 +96,13 @@ func (s *Server) buildRouter() *chi.Mux {
 		r.Put("/joins/{id}", s.updateJoin)
 		r.Delete("/joins/{id}", s.deleteJoin)
 		r.Post("/joins/{id}/execute", s.executeJoin)
+
+		r.Get("/charts", s.listCharts)
+		r.Post("/charts", s.createChart)
+		r.Get("/charts/{id}", s.getChart)
+		r.Put("/charts/{id}", s.updateChart)
+		r.Delete("/charts/{id}", s.deleteChart)
+		r.Post("/charts/{id}/execute", s.executeChart)
 	})
 
 	// Serve embedded React UI — SPA fallback to index.html
@@ -563,6 +571,108 @@ func (s *Server) executeJoin(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	rs, err := (&join.Engine{}).Execute(ctx, def, adapters)
 	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, rs)
+}
+
+// ── Chart handlers ────────────────────────────────────────────────────────────
+
+func (s *Server) listCharts(w http.ResponseWriter, r *http.Request) {
+	charts, err := s.store.ListCharts(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if charts == nil {
+		charts = []chart.Definition{}
+	}
+	writeJSON(w, 200, charts)
+}
+
+func (s *Server) createChart(w http.ResponseWriter, r *http.Request) {
+	var req chart.Definition
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Name == "" || req.ConnectionID == "" || req.SQL == "" {
+		writeError(w, 400, "name, connection_id, and sql are required")
+		return
+	}
+	id, err := newID()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	req.ID = id
+	if err := s.store.SaveChart(r.Context(), req); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, req)
+}
+
+func (s *Server) getChart(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	c, err := s.store.GetChart(r.Context(), id)
+	if err != nil {
+		writeError(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, c)
+}
+
+func (s *Server) updateChart(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	existing, err := s.store.GetChart(r.Context(), id)
+	if err != nil {
+		writeError(w, 404, err.Error())
+		return
+	}
+	var req chart.Definition
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	req.ID = existing.ID
+	if req.Name == "" {
+		req.Name = existing.Name
+	}
+	if err := s.store.SaveChart(r.Context(), req); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, req)
+}
+
+func (s *Server) deleteChart(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.store.DeleteChart(r.Context(), id); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) executeChart(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	c, err := s.store.GetChart(r.Context(), id)
+	if err != nil {
+		writeError(w, 404, err.Error())
+		return
+	}
+	a, err := s.getAdapter(r.Context(), c.ConnectionID)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	rs, err := a.Query(ctx, c.SQL, 1000)
+	if err != nil {
+		s.evictAdapter(c.ConnectionID)
 		writeError(w, 500, err.Error())
 		return
 	}

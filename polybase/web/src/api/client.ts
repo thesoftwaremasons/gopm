@@ -4,6 +4,7 @@ import type {
   ResultSet,
   CreateConnectionRequest,
   JoinDefinition,
+  ChartDefinition,
 } from '../types'
 
 const BASE = '/api/v1'
@@ -94,3 +95,27 @@ export const deleteJoin = (id: string): Promise<void> =>
 
 export const executeJoin = (id: string): Promise<ResultSet> =>
   request(`/joins/${id}/execute`, { method: 'POST' })
+
+// Charts
+export const listCharts = (): Promise<ChartDefinition[]> =>
+  request('/charts')
+
+export const getChart = (id: string): Promise<ChartDefinition> =>
+  request(`/charts/${id}`)
+
+export const createChart = (
+  data: Omit<ChartDefinition, 'id' | 'created_at' | 'updated_at'>
+): Promise<ChartDefinition> =>
+  request('/charts', { method: 'POST', body: JSON.stringify(data) })
+
+export const updateChart = (
+  id: string,
+  data: Omit<ChartDefinition, 'id' | 'created_at' | 'updated_at'>
+): Promise<ChartDefinition> =>
+  request(`/charts/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+
+export const deleteChart = (id: string): Promise<void> =>
+  request(`/charts/${id}`, { method: 'DELETE' })
+
+export const executeChart = (id: string): Promise<ResultSet> =>
+  request(`/charts/${id}/execute`, { method: 'POST' })
