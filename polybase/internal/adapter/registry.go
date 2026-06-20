@@ -1,6 +1,9 @@
 package adapter
 
-import "fmt"
+import (
+	"fmt"
+	"sort"
+)
 
 type Constructor func() Adapter
 
@@ -23,5 +26,6 @@ func Engines() []string {
 	for k := range registry {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }

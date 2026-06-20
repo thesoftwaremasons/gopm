@@ -33,6 +33,10 @@ func NewStore(path string, masterKey []byte) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("metadata: open: %w", err)
 	}
+	if _, err := db.Exec("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;"); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("metadata: pragma: %w", err)
+	}
 	s := &Store{db: db, key: masterKey}
 	if err := s.migrate(); err != nil {
 		db.Close()

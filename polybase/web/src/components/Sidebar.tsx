@@ -8,6 +8,7 @@ import { deleteConnection, testConnection } from '../api/client'
 
 export function Sidebar() {
   const [showForm, setShowForm] = useState(false)
+  const [testStatus, setTestStatus] = useState<{ ok: boolean; msg: string } | null>(null)
   const { id } = useParams<{ id: string }>()
   const qc = useQueryClient()
 
@@ -19,11 +20,12 @@ export function Sidebar() {
   const testMutation = useMutation({
     mutationFn: testConnection,
     onSuccess: (data) => {
-      if (data.ok) {
-        alert('Connection successful!')
-      } else {
-        alert(`Connection failed: ${data.error}`)
-      }
+      setTestStatus({ ok: data.ok, msg: data.ok ? 'Connection successful' : (data.error ?? 'Connection failed') })
+      setTimeout(() => setTestStatus(null), 4000)
+    },
+    onError: (err: Error) => {
+      setTestStatus({ ok: false, msg: err.message })
+      setTimeout(() => setTestStatus(null), 4000)
     },
   })
 
@@ -63,6 +65,17 @@ export function Sidebar() {
               >
                 {testMutation.isPending ? '⏳ Testing...' : '✓ Test Connection'}
               </button>
+              {testStatus && (
+                <div
+                  className={`px-2 py-1.5 text-xs rounded ${
+                    testStatus.ok
+                      ? 'bg-green-800 text-green-100'
+                      : 'bg-red-800 text-red-100'
+                  }`}
+                >
+                  {testStatus.msg}
+                </div>
+              )}
               <button
                 onClick={() => {
                   if (confirm('Delete this connection?')) {

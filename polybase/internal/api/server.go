@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -22,6 +24,8 @@ import (
 	"github.com/thesoftwaremasons/polybase/internal/crypto"
 	"github.com/thesoftwaremasons/polybase/internal/metadata"
 )
+
+const maxBodyBytes = 1 << 20 // 1 MiB
 
 //go:generate sh -c "cd ../../web && npm run build && rm -rf ../internal/api/webdist && cp -r dist ../internal/api/webdist"
 
@@ -123,13 +127,18 @@ func writeError(w http.ResponseWriter, code int, msg string) {
 	writeJSON(w, code, map[string]string{"error": msg})
 }
 
-func readJSON(r *http.Request, dst interface{}) error {
+func readJSON(w http.ResponseWriter, r *http.Request, dst interface{}) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	return json.NewDecoder(r.Body).Decode(dst)
 }
 
+// corsMiddleware allows cross-origin requests from localhost only (dev mode support).
 func corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
+		origin := r.Header.Get("Origin")
+		if origin != "" && (strings.HasPrefix(origin, "http://localhost:") || strings.HasPrefix(origin, "http://127.0.0.1:")) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+		}
 		w.Header().Set("Access-Control-Allow-Methods", "GET,POST,PUT,DELETE,OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
@@ -153,16 +162,17 @@ func (s *Server) getAdapter(ctx context.Context, id string) (adapter.Adapter, er
 	if ok {
 		return a, nil
 	}
-	// Not connected yet — load and connect.
+	// Double-check under write lock to prevent duplicate connects.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if a, ok = s.adapters[id]; ok {
+		return a, nil
+	}
 	conn, err := s.store.GetConnection(ctx, id)
 	if err != nil {
 		return nil, err
 	}
-	return s.connectAdapter(ctx, conn)
-}
-
-func (s *Server) connectAdapter(ctx context.Context, conn metadata.StoredConnection) (adapter.Adapter, error) {
-	a, err := adapter.New(conn.Engine)
+	a, err = adapter.New(conn.Engine)
 	if err != nil {
 		return nil, err
 	}
@@ -171,10 +181,17 @@ func (s *Server) connectAdapter(ctx context.Context, conn metadata.StoredConnect
 	if err := a.Connect(ctx2, conn.Config); err != nil {
 		return nil, err
 	}
-	s.mu.Lock()
-	s.adapters[conn.ID] = a
-	s.mu.Unlock()
+	s.adapters[id] = a
 	return a, nil
+}
+
+func (s *Server) evictAdapter(id string) {
+	s.mu.Lock()
+	if a, ok := s.adapters[id]; ok {
+		_ = a.Close()
+		delete(s.adapters, id)
+	}
+	s.mu.Unlock()
 }
 
 // ── handlers ─────────────────────────────────────────────────────────────────
@@ -198,7 +215,7 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 		Engine string                  `json:"engine"`
 		Config adapter.ConnectionConfig `json:"config"`
 	}
-	if err := readJSON(r, &req); err != nil {
+	if err := readJSON(w, r, &req); err != nil {
 		writeError(w, 400, "invalid JSON: "+err.Error())
 		return
 	}
@@ -208,7 +225,11 @@ func (s *Server) createConnection(w http.ResponseWriter, r *http.Request) {
 	}
 	req.Config.Name = req.Name
 	req.Config.Engine = req.Engine
-	id := newID()
+	id, err := newID()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
 	req.Config.ID = id
 	conn := metadata.StoredConnection{
 		ID:     id,
@@ -244,7 +265,7 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 		Name   string                  `json:"name"`
 		Config adapter.ConnectionConfig `json:"config"`
 	}
-	if err := readJSON(r, &req); err != nil {
+	if err := readJSON(w, r, &req); err != nil {
 		writeError(w, 400, err.Error())
 		return
 	}
@@ -343,12 +364,21 @@ func (s *Server) listSchemas(w http.ResponseWriter, r *http.Request) {
 func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	q := r.URL.Query()
+	table := q.Get("table")
+	if table == "" {
+		writeError(w, 400, "table is required")
+		return
+	}
 	opts := adapter.BrowseOpts{
 		Schema: q.Get("schema"),
-		Table:  q.Get("table"),
+		Table:  table,
 	}
-	fmt.Sscanf(q.Get("offset"), "%d", &opts.Offset)
-	fmt.Sscanf(q.Get("limit"), "%d", &opts.Limit)
+	if v, err := strconv.Atoi(q.Get("offset")); err == nil && v >= 0 {
+		opts.Offset = v
+	}
+	if v, err := strconv.Atoi(q.Get("limit")); err == nil && v > 0 {
+		opts.Limit = v
+	}
 	if opts.Limit <= 0 {
 		opts.Limit = 100
 	}
@@ -365,6 +395,7 @@ func (s *Server) browse(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	rs, err := a.Browse(ctx, opts)
 	if err != nil {
+		s.evictAdapter(id)
 		writeError(w, 500, err.Error())
 		return
 	}
@@ -377,7 +408,7 @@ func (s *Server) runQuery(w http.ResponseWriter, r *http.Request) {
 		Query    string `json:"query"`
 		RowLimit int    `json:"row_limit"`
 	}
-	if err := readJSON(r, &body); err != nil {
+	if err := readJSON(w, r, &body); err != nil {
 		writeError(w, 400, err.Error())
 		return
 	}
@@ -393,13 +424,17 @@ func (s *Server) runQuery(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	rs, err := a.Query(ctx, body.Query, body.RowLimit)
 	if err != nil {
+		s.evictAdapter(id)
 		writeError(w, 500, err.Error())
 		return
 	}
 	writeJSON(w, 200, rs)
 }
 
-func newID() string {
-	id, _ := uuid.NewRandom()
-	return id.String()
+func newID() (string, error) {
+	id, err := uuid.NewRandom()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate ID: %w", err)
+	}
+	return id.String(), nil
 }

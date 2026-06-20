@@ -89,9 +89,12 @@ var mgWriteCommands = []string{"insert", "update", "delete", "drop", "create", "
 
 func (a *mgAdapter) Query(ctx context.Context, query string, rowLimit int) (adapter.ResultSet, error) {
 	if a.cfg.ReadOnly {
-		lower := strings.ToLower(strings.TrimSpace(query))
+		// The query format is "collectionName\nfilterJSON" — the first token is the collection
+		// name, not a command. Block only if the WHOLE first line exactly matches a write command
+		// (word boundary check), not if a collection name merely starts with one.
+		firstLine := strings.ToLower(strings.TrimSpace(strings.SplitN(query, "\n", 2)[0]))
 		for _, cmd := range mgWriteCommands {
-			if strings.HasPrefix(lower, cmd) {
+			if firstLine == cmd {
 				return adapter.ResultSet{}, fmt.Errorf("connection is read-only: %s not allowed", cmd)
 			}
 		}
