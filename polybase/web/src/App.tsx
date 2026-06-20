@@ -3,6 +3,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Sidebar } from './components/Sidebar'
 import { DataBrowser } from './components/DataBrowser'
 import { QueryEditor } from './components/QueryEditor'
+import { JoinBuilder } from './components/JoinBuilder'
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -64,6 +65,22 @@ function App() {
             element={
               <Layout>
                 <QueryEditor />
+              </Layout>
+            }
+          />
+          <Route
+            path="/joins/new"
+            element={
+              <Layout>
+                <JoinBuilder />
+              </Layout>
+            }
+          />
+          <Route
+            path="/joins/:joinId"
+            element={
+              <Layout>
+                <JoinBuilder />
               </Layout>
             }
           />

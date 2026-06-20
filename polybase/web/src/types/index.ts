@@ -51,3 +51,18 @@ export interface CreateConnectionRequest {
   engine: string
   config: Partial<ConnectionConfig>
 }
+
+export interface JoinDefinition {
+  id: string
+  name: string
+  source_a: string
+  source_b: string
+  key_field_a: string
+  key_field_b: string
+  table_a: string
+  table_b: string
+  schema_a: string
+  schema_b: string
+  created_at?: string
+  updated_at?: string
+}

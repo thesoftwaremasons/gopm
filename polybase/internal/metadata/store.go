@@ -9,6 +9,7 @@ import (
 
 	"github.com/thesoftwaremasons/polybase/internal/adapter"
 	"github.com/thesoftwaremasons/polybase/internal/crypto"
+	"github.com/thesoftwaremasons/polybase/internal/join"
 	_ "modernc.org/sqlite"
 )
 
@@ -59,7 +60,70 @@ func (s *Store) migrate() error {
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
 		);
+		CREATE TABLE IF NOT EXISTS join_definitions (
+			id         TEXT PRIMARY KEY,
+			name       TEXT NOT NULL,
+			definition TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		);
 	`)
+	return err
+}
+
+// ── Join CRUD ─────────────────────────────────────────────────────────────────
+
+func (s *Store) SaveJoin(ctx context.Context, j join.JoinDefinition) error {
+	data, err := json.Marshal(j)
+	if err != nil {
+		return fmt.Errorf("metadata: marshal join: %w", err)
+	}
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err = s.db.ExecContext(ctx, `
+		INSERT INTO join_definitions(id,name,definition,created_at,updated_at)
+		VALUES(?,?,?,?,?)
+		ON CONFLICT(id) DO UPDATE SET
+			name=excluded.name, definition=excluded.definition, updated_at=excluded.updated_at`,
+		j.ID, j.Name, string(data), now, now)
+	return err
+}
+
+func (s *Store) ListJoins(ctx context.Context) ([]join.JoinDefinition, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT definition FROM join_definitions ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []join.JoinDefinition
+	for rows.Next() {
+		var raw string
+		if err := rows.Scan(&raw); err != nil {
+			return nil, err
+		}
+		var j join.JoinDefinition
+		if err := json.Unmarshal([]byte(raw), &j); err != nil {
+			return nil, err
+		}
+		out = append(out, j)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) GetJoin(ctx context.Context, id string) (join.JoinDefinition, error) {
+	var raw string
+	err := s.db.QueryRowContext(ctx, `SELECT definition FROM join_definitions WHERE id=?`, id).Scan(&raw)
+	if err == sql.ErrNoRows {
+		return join.JoinDefinition{}, fmt.Errorf("join %q not found", id)
+	}
+	if err != nil {
+		return join.JoinDefinition{}, err
+	}
+	var j join.JoinDefinition
+	return j, json.Unmarshal([]byte(raw), &j)
+}
+
+func (s *Store) DeleteJoin(ctx context.Context, id string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM join_definitions WHERE id=?`, id)
 	return err
 }
 

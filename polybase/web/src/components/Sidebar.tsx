@@ -1,15 +1,17 @@
 import { useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { ConnectionList } from './ConnectionList'
 import { ConnectionForm } from './ConnectionForm'
 import { SchemaTree } from './SchemaTree'
+import { JoinList } from './JoinList'
 import { deleteConnection, testConnection } from '../api/client'
 
 export function Sidebar() {
   const [showForm, setShowForm] = useState(false)
   const [testStatus, setTestStatus] = useState<{ ok: boolean; msg: string } | null>(null)
   const { id } = useParams<{ id: string }>()
+  const navigate = useNavigate()
   const qc = useQueryClient()
 
   const deleteMutation = useMutation({
@@ -89,6 +91,21 @@ export function Sidebar() {
             </div>
           </>
         )}
+      </div>
+
+      {/* Joins section */}
+      <div className="border-t border-slate-700 pt-2">
+        <div className="flex items-center justify-between px-3 py-1">
+          <span className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Joins</span>
+          <button
+            onClick={() => navigate('/joins/new')}
+            className="text-slate-400 hover:text-white text-xs transition-colors"
+            title="New join"
+          >
+            +
+          </button>
+        </div>
+        <JoinList />
       </div>
 
       {/* Add connection button */}

@@ -3,6 +3,7 @@ import type {
   SchemaInfo,
   ResultSet,
   CreateConnectionRequest,
+  JoinDefinition,
 } from '../types'
 
 const BASE = '/api/v1'
@@ -69,3 +70,27 @@ export const runQuery = (
     method: 'POST',
     body: JSON.stringify({ query, row_limit: rowLimit }),
   })
+
+// Joins
+export const listJoins = (): Promise<JoinDefinition[]> =>
+  request('/joins')
+
+export const getJoin = (id: string): Promise<JoinDefinition> =>
+  request(`/joins/${id}`)
+
+export const createJoin = (
+  data: Omit<JoinDefinition, 'id' | 'created_at' | 'updated_at'>
+): Promise<JoinDefinition> =>
+  request('/joins', { method: 'POST', body: JSON.stringify(data) })
+
+export const updateJoin = (
+  id: string,
+  data: Omit<JoinDefinition, 'id' | 'created_at' | 'updated_at'>
+): Promise<JoinDefinition> =>
+  request(`/joins/${id}`, { method: 'PUT', body: JSON.stringify(data) })
+
+export const deleteJoin = (id: string): Promise<void> =>
+  request(`/joins/${id}`, { method: 'DELETE' })
+
+export const executeJoin = (id: string): Promise<ResultSet> =>
+  request(`/joins/${id}/execute`, { method: 'POST' })

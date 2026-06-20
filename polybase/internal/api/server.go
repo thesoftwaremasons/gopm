@@ -22,6 +22,7 @@ import (
 	_ "github.com/thesoftwaremasons/polybase/internal/adapter/mongodb"
 	_ "github.com/thesoftwaremasons/polybase/internal/adapter/postgres"
 	"github.com/thesoftwaremasons/polybase/internal/crypto"
+	"github.com/thesoftwaremasons/polybase/internal/join"
 	"github.com/thesoftwaremasons/polybase/internal/metadata"
 )
 
@@ -87,6 +88,13 @@ func (s *Server) buildRouter() *chi.Mux {
 		r.Get("/connections/{id}/schemas", s.listSchemas)
 		r.Get("/connections/{id}/browse", s.browse)
 		r.Post("/connections/{id}/query", s.runQuery)
+
+		r.Get("/joins", s.listJoins)
+		r.Post("/joins", s.createJoin)
+		r.Get("/joins/{id}", s.getJoin)
+		r.Put("/joins/{id}", s.updateJoin)
+		r.Delete("/joins/{id}", s.deleteJoin)
+		r.Post("/joins/{id}/execute", s.executeJoin)
 	})
 
 	// Serve embedded React UI — SPA fallback to index.html
@@ -437,4 +445,126 @@ func newID() (string, error) {
 		return "", fmt.Errorf("failed to generate ID: %w", err)
 	}
 	return id.String(), nil
+}
+
+// ── Join handlers ─────────────────────────────────────────────────────────────
+
+func (s *Server) listJoins(w http.ResponseWriter, r *http.Request) {
+	joins, err := s.store.ListJoins(r.Context())
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	if joins == nil {
+		joins = []join.JoinDefinition{}
+	}
+	writeJSON(w, 200, joins)
+}
+
+func (s *Server) createJoin(w http.ResponseWriter, r *http.Request) {
+	var req join.JoinDefinition
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, 400, "invalid JSON: "+err.Error())
+		return
+	}
+	if req.Name == "" {
+		writeError(w, 400, "name is required")
+		return
+	}
+	if req.SourceA == "" || req.SourceB == "" {
+		writeError(w, 400, "source_a and source_b are required")
+		return
+	}
+	if req.TableA == "" || req.TableB == "" {
+		writeError(w, 400, "table_a and table_b are required")
+		return
+	}
+	if req.KeyFieldA == "" || req.KeyFieldB == "" {
+		writeError(w, 400, "key_field_a and key_field_b are required")
+		return
+	}
+	id, err := newID()
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	req.ID = id
+	if err := s.store.SaveJoin(r.Context(), req); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, req)
+}
+
+func (s *Server) getJoin(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	j, err := s.store.GetJoin(r.Context(), id)
+	if err != nil {
+		writeError(w, 404, err.Error())
+		return
+	}
+	writeJSON(w, 200, j)
+}
+
+func (s *Server) updateJoin(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	existing, err := s.store.GetJoin(r.Context(), id)
+	if err != nil {
+		writeError(w, 404, err.Error())
+		return
+	}
+	var req join.JoinDefinition
+	if err := readJSON(w, r, &req); err != nil {
+		writeError(w, 400, err.Error())
+		return
+	}
+	req.ID = existing.ID
+	if req.Name == "" {
+		req.Name = existing.Name
+	}
+	if err := s.store.SaveJoin(r.Context(), req); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, req)
+}
+
+func (s *Server) deleteJoin(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	if err := s.store.DeleteJoin(r.Context(), id); err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	w.WriteHeader(204)
+}
+
+func (s *Server) executeJoin(w http.ResponseWriter, r *http.Request) {
+	id := chi.URLParam(r, "id")
+	def, err := s.store.GetJoin(r.Context(), id)
+	if err != nil {
+		writeError(w, 404, err.Error())
+		return
+	}
+	aAdapter, err := s.getAdapter(r.Context(), def.SourceA)
+	if err != nil {
+		writeError(w, 500, "source_a: "+err.Error())
+		return
+	}
+	bAdapter, err := s.getAdapter(r.Context(), def.SourceB)
+	if err != nil {
+		writeError(w, 500, "source_b: "+err.Error())
+		return
+	}
+	adapters := map[string]adapter.Adapter{
+		def.SourceA: aAdapter,
+		def.SourceB: bAdapter,
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	rs, err := (&join.Engine{}).Execute(ctx, def, adapters)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 200, rs)
 }
