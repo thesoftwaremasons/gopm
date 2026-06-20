@@ -1,0 +1,53 @@
+export interface ConnectionConfig {
+  id: string
+  name: string
+  engine: string
+  host: string
+  port: number
+  database: string
+  username: string
+  password?: string
+  read_only: boolean
+  ssl_mode?: string
+  options?: Record<string, string>
+}
+
+export interface StoredConnection {
+  id: string
+  name: string
+  engine: string
+  config: ConnectionConfig
+  created_at: string
+  updated_at: string
+}
+
+export interface Column {
+  name: string
+  data_type: string
+  nullable: boolean
+}
+
+export interface TableInfo {
+  name: string
+  schema: string
+  type: 'table' | 'view' | 'collection'
+  columns?: Column[]
+}
+
+export interface SchemaInfo {
+  name: string
+  tables: TableInfo[]
+}
+
+export interface ResultSet {
+  columns: string[]
+  rows: unknown[][]
+  total: number
+  has_more: boolean
+}
+
+export interface CreateConnectionRequest {
+  name: string
+  engine: string
+  config: Partial<ConnectionConfig>
+}

@@ -1,0 +1,178 @@
+package postgres
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"strings"
+
+	"github.com/thesoftwaremasons/polybase/internal/adapter"
+	_ "github.com/jackc/pgx/v5/stdlib"
+)
+
+func init() {
+	adapter.Register("postgres", func() adapter.Adapter { return &pgAdapter{} })
+}
+
+type pgAdapter struct {
+	db  *sql.DB
+	cfg adapter.ConnectionConfig
+}
+
+func (a *pgAdapter) Connect(ctx context.Context, cfg adapter.ConnectionConfig) error {
+	sslmode := cfg.SSLMode
+	if sslmode == "" {
+		sslmode = "disable"
+	}
+	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, sslmode)
+	db, err := sql.Open("pgx", dsn)
+	if err != nil {
+		return fmt.Errorf("postgres: open: %w", err)
+	}
+	db.SetMaxOpenConns(5)
+	db.SetMaxIdleConns(2)
+	if err := db.PingContext(ctx); err != nil {
+		db.Close()
+		return fmt.Errorf("postgres: ping: %w", err)
+	}
+	a.db = db
+	a.cfg = cfg
+	return nil
+}
+
+func (a *pgAdapter) ListSchemas(ctx context.Context) ([]adapter.SchemaInfo, error) {
+	rows, err := a.db.QueryContext(ctx, `
+		SELECT table_schema, table_name, table_type
+		FROM information_schema.tables
+		WHERE table_schema NOT IN ('pg_catalog','information_schema')
+		ORDER BY table_schema, table_name`)
+	if err != nil {
+		return nil, fmt.Errorf("postgres: list schemas: %w", err)
+	}
+	defer rows.Close()
+
+	schemas := map[string]*adapter.SchemaInfo{}
+	var order []string
+	for rows.Next() {
+		var schemaName, tableName, tableType string
+		if err := rows.Scan(&schemaName, &tableName, &tableType); err != nil {
+			return nil, err
+		}
+		if _, ok := schemas[schemaName]; !ok {
+			schemas[schemaName] = &adapter.SchemaInfo{Name: schemaName}
+			order = append(order, schemaName)
+		}
+		typ := "table"
+		if strings.EqualFold(tableType, "VIEW") {
+			typ = "view"
+		}
+		schemas[schemaName].Tables = append(schemas[schemaName].Tables, adapter.TableInfo{
+			Name:   tableName,
+			Schema: schemaName,
+			Type:   typ,
+		})
+	}
+	result := make([]adapter.SchemaInfo, 0, len(order))
+	for _, name := range order {
+		result = append(result, *schemas[name])
+	}
+	return result, nil
+}
+
+func (a *pgAdapter) Browse(ctx context.Context, opts adapter.BrowseOpts) (adapter.ResultSet, error) {
+	limit := opts.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 100
+	}
+	qSchema := opts.Schema
+	if qSchema == "" {
+		qSchema = "public"
+	}
+	countQuery := fmt.Sprintf(`SELECT COUNT(*) FROM %q.%q`, qSchema, opts.Table)
+	var total int64
+	_ = a.db.QueryRowContext(ctx, countQuery).Scan(&total)
+
+	query := fmt.Sprintf(`SELECT * FROM %q.%q LIMIT %d OFFSET %d`, qSchema, opts.Table, limit, opts.Offset)
+	rows, err := a.db.QueryContext(ctx, query)
+	if err != nil {
+		return adapter.ResultSet{}, fmt.Errorf("postgres: browse: %w", err)
+	}
+	defer rows.Close()
+	return scanRows(rows, total, limit, opts.Offset)
+}
+
+func (a *pgAdapter) MultiGet(ctx context.Context, keys []string, opts adapter.MultiGetOpts) (adapter.ResultSet, error) {
+	placeholders := make([]string, len(keys))
+	args := make([]interface{}, len(keys))
+	for i, k := range keys {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = k
+	}
+	q := fmt.Sprintf(`SELECT * FROM %q.%q WHERE %q IN (%s)`,
+		opts.Schema, opts.Table, opts.Field, strings.Join(placeholders, ","))
+	rows, err := a.db.QueryContext(ctx, q, args...)
+	if err != nil {
+		return adapter.ResultSet{}, fmt.Errorf("postgres: multiget: %w", err)
+	}
+	defer rows.Close()
+	return scanRows(rows, int64(len(keys)), len(keys), 0)
+}
+
+var writePrefixes = []string{"INSERT", "UPDATE", "DELETE", "DROP", "CREATE", "ALTER", "TRUNCATE", "REPLACE", "GRANT", "REVOKE"}
+
+func (a *pgAdapter) Query(ctx context.Context, query string, rowLimit int) (adapter.ResultSet, error) {
+	if a.cfg.ReadOnly {
+		first := strings.ToUpper(strings.TrimSpace(query))
+		for _, prefix := range writePrefixes {
+			if strings.HasPrefix(first, prefix) {
+				return adapter.ResultSet{}, fmt.Errorf("connection is read-only: %s not allowed", prefix)
+			}
+		}
+	}
+	if rowLimit <= 0 || rowLimit > 1000 {
+		rowLimit = 1000
+	}
+	rows, err := a.db.QueryContext(ctx, fmt.Sprintf("SELECT * FROM (%s) _q LIMIT %d", query, rowLimit))
+	if err != nil {
+		return adapter.ResultSet{}, fmt.Errorf("postgres: query: %w", err)
+	}
+	defer rows.Close()
+	return scanRows(rows, 0, rowLimit, 0)
+}
+
+func (a *pgAdapter) Close() error {
+	if a.db != nil {
+		return a.db.Close()
+	}
+	return nil
+}
+
+func scanRows(rows *sql.Rows, total int64, limit, offset int) (adapter.ResultSet, error) {
+	cols, err := rows.Columns()
+	if err != nil {
+		return adapter.ResultSet{}, err
+	}
+	var result adapter.ResultSet
+	result.Columns = cols
+	result.Total = total
+	for rows.Next() {
+		vals := make([]interface{}, len(cols))
+		ptrs := make([]interface{}, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return adapter.ResultSet{}, err
+		}
+		// convert []byte → string for JSON friendliness
+		for i, v := range vals {
+			if b, ok := v.([]byte); ok {
+				vals[i] = string(b)
+			}
+		}
+		result.Rows = append(result.Rows, vals)
+	}
+	result.HasMore = total > int64(offset+limit)
+	return result, rows.Err()
+}
