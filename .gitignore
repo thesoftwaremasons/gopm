@@ -27,3 +27,9 @@ Thumbs.db
 # Go workspace/cache artifacts
 coverage.out
 *.coverprofile
+
+# Polybase node_modules
+web/polybase/node_modules/
+
+# Built polybase binary (built from cmd/polybase)
+/polybase
