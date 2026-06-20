@@ -278,8 +278,16 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req struct {
-		Name   string                  `json:"name"`
-		Config adapter.ConnectionConfig `json:"config"`
+		Name   string `json:"name"`
+		Config struct {
+			Host     string `json:"host"`
+			Port     int    `json:"port"`
+			Database string `json:"database"`
+			Username string `json:"username"`
+			Password string `json:"password"`
+			ReadOnly *bool  `json:"read_only"` // pointer: nil means "not provided"
+			SSLMode  string `json:"ssl_mode"`
+		} `json:"config"`
 	}
 	if err := readJSON(w, r, &req); err != nil {
 		writeError(w, 400, err.Error())
@@ -303,7 +311,9 @@ func (s *Server) updateConnection(w http.ResponseWriter, r *http.Request) {
 	if req.Config.Password != "" {
 		existing.Config.Password = req.Config.Password
 	}
-	existing.Config.ReadOnly = req.Config.ReadOnly
+	if req.Config.ReadOnly != nil {
+		existing.Config.ReadOnly = *req.Config.ReadOnly
+	}
 	if req.Config.SSLMode != "" {
 		existing.Config.SSLMode = req.Config.SSLMode
 	}
@@ -577,6 +587,31 @@ func (s *Server) executeJoin(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, rs)
 }
 
+// sqlLooksLikeWrite is a best-effort guard against storing or executing write
+// SQL in a chart definition. The adapter's read-only check is the primary
+// enforcement; this prevents obviously destructive SQL from being saved at all.
+var chartWriteKeywords = []string{
+	"INSERT", "UPDATE", "DELETE", "DROP", "CREATE",
+	"ALTER", "TRUNCATE", "REPLACE", "GRANT", "REVOKE",
+}
+
+func sqlLooksLikeWrite(s string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(s))
+	for _, kw := range chartWriteKeywords {
+		if upper == kw || strings.HasPrefix(upper, kw+" ") || strings.HasPrefix(upper, kw+"\t") {
+			return true
+		}
+	}
+	if strings.HasPrefix(upper, "WITH ") || strings.HasPrefix(upper, "WITH\t") {
+		for _, kw := range []string{"INSERT", "UPDATE", "DELETE"} {
+			if strings.Contains(upper, " "+kw+" ") || strings.Contains(upper, "\t"+kw+" ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // ── Chart handlers ────────────────────────────────────────────────────────────
 
 func (s *Server) listCharts(w http.ResponseWriter, r *http.Request) {
@@ -599,6 +634,10 @@ func (s *Server) createChart(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.Name == "" || req.ConnectionID == "" || req.SQL == "" {
 		writeError(w, 400, "name, connection_id, and sql are required")
+		return
+	}
+	if sqlLooksLikeWrite(req.SQL) {
+		writeError(w, 400, "chart SQL must be a read-only (SELECT) query")
 		return
 	}
 	id, err := newID()
@@ -640,6 +679,10 @@ func (s *Server) updateChart(w http.ResponseWriter, r *http.Request) {
 	if req.Name == "" {
 		req.Name = existing.Name
 	}
+	if req.SQL != "" && sqlLooksLikeWrite(req.SQL) {
+		writeError(w, 400, "chart SQL must be a read-only (SELECT) query")
+		return
+	}
 	if err := s.store.SaveChart(r.Context(), req); err != nil {
 		writeError(w, 500, err.Error())
 		return
@@ -661,6 +704,10 @@ func (s *Server) executeChart(w http.ResponseWriter, r *http.Request) {
 	c, err := s.store.GetChart(r.Context(), id)
 	if err != nil {
 		writeError(w, 404, err.Error())
+		return
+	}
+	if sqlLooksLikeWrite(c.SQL) {
+		writeError(w, 400, "chart SQL must be a read-only (SELECT) query")
 		return
 	}
 	a, err := s.getAdapter(r.Context(), c.ConnectionID)

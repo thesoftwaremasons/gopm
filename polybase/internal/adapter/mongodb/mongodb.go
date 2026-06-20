@@ -3,6 +3,8 @@ package mongodb
 import (
 	"context"
 	"fmt"
+	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/thesoftwaremasons/polybase/internal/adapter"
@@ -10,6 +12,8 @@ import (
 	"go.mongodb.org/mongo-driver/v2/mongo"
 	"go.mongodb.org/mongo-driver/v2/mongo/options"
 )
+
+var mgIdentRe = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 func init() {
 	adapter.Register("mongodb", func() adapter.Adapter { return &mgAdapter{} })
@@ -22,12 +26,15 @@ type mgAdapter struct {
 }
 
 func (a *mgAdapter) Connect(ctx context.Context, cfg adapter.ConnectionConfig) error {
-	uri := fmt.Sprintf("mongodb://%s:%s@%s:%d/%s",
-		cfg.Username, cfg.Password, cfg.Host, cfg.Port, cfg.Database)
-	if cfg.Username == "" {
-		uri = fmt.Sprintf("mongodb://%s:%d/%s", cfg.Host, cfg.Port, cfg.Database)
+	u := &url.URL{
+		Scheme: "mongodb",
+		Host:   fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Path:   "/" + cfg.Database,
 	}
-	opts := options.Client().ApplyURI(uri)
+	if cfg.Username != "" {
+		u.User = url.UserPassword(cfg.Username, cfg.Password)
+	}
+	opts := options.Client().ApplyURI(u.String())
 	client, err := mongo.Connect(opts)
 	if err != nil {
 		return fmt.Errorf("mongodb: connect: %w", err)
@@ -72,6 +79,9 @@ func (a *mgAdapter) Browse(ctx context.Context, opts adapter.BrowseOpts) (adapte
 }
 
 func (a *mgAdapter) MultiGet(ctx context.Context, keys []string, opts adapter.MultiGetOpts) (adapter.ResultSet, error) {
+	if !mgIdentRe.MatchString(opts.Field) {
+		return adapter.ResultSet{}, fmt.Errorf("mongodb: invalid field name %q", opts.Field)
+	}
 	ids := make(bson.A, len(keys))
 	for i, k := range keys {
 		ids[i] = k
@@ -135,16 +145,12 @@ func scanCursor(ctx context.Context, cursor *mongo.Cursor, total int64, limit, o
 	if len(docs) == 0 {
 		return adapter.ResultSet{Columns: []string{}, Rows: [][]interface{}{}, Total: total}, nil
 	}
-	// collect all keys as columns (from first doc)
+	// Seed columns from the first document only — scanning all docs is O(N×F).
 	colSet := map[string]int{}
 	var cols []string
-	for _, doc := range docs {
-		for k := range doc {
-			if _, seen := colSet[k]; !seen {
-				colSet[k] = len(cols)
-				cols = append(cols, k)
-			}
-		}
+	for k := range docs[0] {
+		colSet[k] = len(cols)
+		cols = append(cols, k)
 	}
 	rows := make([][]interface{}, len(docs))
 	for i, doc := range docs {

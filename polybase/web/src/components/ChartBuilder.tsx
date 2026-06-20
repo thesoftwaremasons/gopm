@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { listConnections, listSchemas, getChart, createChart, updateChart, executeChart } from '../api/client'
+import { listConnections, listSchemas, getChart, createChart, updateChart, executeChart, runQuery } from '../api/client'
 import type { ResultSet, ChartType } from '../types'
 import { ChartView } from './ChartView'
 import { ResultGrid } from './ResultGrid'
@@ -14,6 +14,7 @@ const CHART_TYPES: { type: ChartType; label: string; icon: string }[] = [
 ]
 
 const AGG_FNS = ['COUNT', 'SUM', 'AVG', 'MAX', 'MIN']
+const SAFE_IDENT = /^[a-zA-Z_][a-zA-Z0-9_]*$/
 
 export function ChartBuilder() {
   const { chartId } = useParams<{ chartId: string }>()
@@ -90,26 +91,18 @@ export function ChartBuilder() {
 
   function buildSQL(): string {
     if (!bTable || !bGroupBy) return ''
-    const metric = bMetric && bAgg !== 'COUNT' ? `${bAgg}(${bMetric})` : 'COUNT(*)'
+    if (!SAFE_IDENT.test(bGroupBy)) return ''
+    if (bMetric && bAgg !== 'COUNT' && !SAFE_IDENT.test(bMetric)) return ''
+    const metric = bMetric && bAgg !== 'COUNT' ? `${bAgg}("${bMetric}")` : 'COUNT(*)'
     const schemaPrefix = bSchema ? `"${bSchema}".` : ''
-    return `SELECT ${bGroupBy}, ${metric} AS value\nFROM ${schemaPrefix}"${bTable}"\nGROUP BY ${bGroupBy}\nORDER BY value DESC\nLIMIT ${bLimit}`
+    return `SELECT "${bGroupBy}", ${metric} AS value\nFROM ${schemaPrefix}"${bTable}"\nGROUP BY "${bGroupBy}"\nORDER BY value DESC\nLIMIT ${bLimit}`
   }
 
   const runMutation = useMutation({
     mutationFn: async () => {
       const effectiveSql = mode === 'builder' ? buildSQL() : sql
       if (mode === 'builder') setSql(effectiveSql)
-      // Run via the connection query endpoint directly
-      const res = await fetch(`/api/v1/connections/${connectionId}/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: effectiveSql, row_limit: 1000 }),
-      })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: res.statusText }))
-        throw new Error(err.error || res.statusText)
-      }
-      return res.json() as Promise<ResultSet>
+      return runQuery(connectionId, effectiveSql, 1000)
     },
     onSuccess: (rs) => {
       setResult(rs)

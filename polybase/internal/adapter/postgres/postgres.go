@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -32,9 +33,16 @@ func (a *pgAdapter) Connect(ctx context.Context, cfg adapter.ConnectionConfig) e
 	if sslmode == "" {
 		sslmode = "disable"
 	}
-	dsn := fmt.Sprintf("host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, sslmode)
-	db, err := sql.Open("pgx", dsn)
+	u := &url.URL{
+		Scheme: "postgres",
+		Host:   fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
+		Path:   "/" + cfg.Database,
+	}
+	if cfg.Username != "" || cfg.Password != "" {
+		u.User = url.UserPassword(cfg.Username, cfg.Password)
+	}
+	u.RawQuery = url.Values{"sslmode": {sslmode}}.Encode()
+	db, err := sql.Open("pgx", u.String())
 	if err != nil {
 		return fmt.Errorf("postgres: open: %w", err)
 	}
@@ -80,6 +88,9 @@ func (a *pgAdapter) ListSchemas(ctx context.Context) ([]adapter.SchemaInfo, erro
 			Schema: schemaName,
 			Type:   typ,
 		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("postgres: list schemas: %w", err)
 	}
 	result := make([]adapter.SchemaInfo, 0, len(order))
 	for _, name := range order {
